@@ -6,12 +6,13 @@ import secrets
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 
 from . import config
-from .models import Health, Weather
+from .models import Health, Usage, Weather
+from .usage import UsageUnavailable, get_usage
 from .weather import WeatherUnavailable, fetch_weather
 
 logging.basicConfig(level=logging.INFO)
 
-app = FastAPI(title="ESP32 Weather Service")
+app = FastAPI(title="ESP32 Dashboard Service")
 
 
 def require_api_key(x_api_key: str = Header(default="")) -> None:
@@ -35,4 +36,15 @@ async def weather() -> Weather:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Weather data unavailable",
+        ) from None
+
+
+@app.get("/api/usage", response_model=Usage, dependencies=[Depends(require_api_key)])
+async def usage() -> Usage:
+    try:
+        return await get_usage()
+    except UsageUnavailable:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Usage data unavailable",
         ) from None
