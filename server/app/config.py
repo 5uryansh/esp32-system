@@ -39,3 +39,9 @@ CLAUDE_BIN: str = "claude"
 CLAUDE_USAGE_MODEL: str = "claude-haiku-4-5-20251001"
 CLAUDE_USAGE_TIMEOUT: float = 60.0
 CLAUDE_USAGE_TTL: float = 300.0
+
+SPOTIFY_CLIENT_ID  = _required("SPOTIFY_CLIENT_ID")
+SPOTIFY_CLIENT_SECRET  = _required("SPOTIFY_CLIENT_SECRET")
+SPOTIFY_REDIRECT_URI = "http://127.0.0.1:8888/callback"
+SPOTIFY_SCOPE = "user-read-currently-playing user-read-recently-played"
+SPOTIFY_REFRESH_TOKEN = _required("SPOTIFY_REFRESH_TOKEN")

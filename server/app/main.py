@@ -6,7 +6,8 @@ import secrets
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 
 from . import config
-from .models import Health, Usage, Weather
+from .models import Health, NowPlaying, Usage, Weather
+from .spotify import SpotifyUnavailable, fetch_now_playing
 from .usage import UsageUnavailable, get_usage
 from .weather import WeatherUnavailable, fetch_weather
 
@@ -47,4 +48,17 @@ async def usage() -> Usage:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Usage data unavailable",
+        ) from None
+
+
+@app.get(
+    "/api/spotify", response_model=NowPlaying, dependencies=[Depends(require_api_key)]
+)
+async def spotify() -> NowPlaying:
+    try:
+        return await fetch_now_playing()
+    except SpotifyUnavailable:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Spotify data unavailable",
         ) from None

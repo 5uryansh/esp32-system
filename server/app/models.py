@@ -22,5 +22,17 @@ class Usage(BaseModel):
     week_reset: str
 
 
+class NowPlaying(BaseModel):
+    """Compact Spotify payload for the ESP32."""
+
+    is_playing: bool
+    track: str | None = None
+    artist: str | None = None
+    album: str | None = None
+    progress: int | None = None  # seconds into the track, live playback only
+    duration: int | None = None  # seconds
+    played_at: str | None = None  # set instead of progress when this is history
+
+
 class Health(BaseModel):
     status: str

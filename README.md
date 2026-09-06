@@ -5,6 +5,7 @@ directly:
 
 - **weather** — current conditions from [Open-Meteo](https://open-meteo.com/en/docs)
 - **usage** — Claude Code quota, read by running `claude -p "/usage"` locally
+- **spotify** — the currently playing track, or the last one played
 
 The ESP32 never talks to the weather provider and never needs Claude
 credentials — it only talks to this server.
@@ -18,6 +19,9 @@ Copy `.env.example` to `.env` and fill it in:
 | `WEATHER_LATITUDE` | Latitude of the location to report |
 | `WEATHER_LONGITUDE` | Longitude of the location to report |
 | `API_KEY` | Secret that clients must send as `X-API-Key` |
+| `SPOTIFY_CLIENT_ID` | From your Spotify app dashboard |
+| `SPOTIFY_CLIENT_SECRET` | From your Spotify app dashboard |
+| `SPOTIFY_REFRESH_TOKEN` | Printed by `python -m app.spotify_auth` (run once) |
 
 `.env` is git-ignored and must never be committed.
 
@@ -46,6 +50,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 | `GET` | `/health` | none | liveness check |
 | `GET` | `/api/weather` | `X-API-Key` | current conditions |
 | `GET` | `/api/usage` | `X-API-Key` | Claude Code quota |
+| `GET` | `/api/spotify` | `X-API-Key` | current or last played track |
 
 Both protected endpoints return `401` if `X-API-Key` is missing or wrong, and
 `502` if their data source fails. Errors are a plain `{"detail": "..."}` —
@@ -143,3 +148,65 @@ is served rather than an error; `502` comes back only when no reading has ever
 succeeded.
 
 The poll runs on `claude-haiku-4-5-20251001` to keep its own cost down.
+
+### `GET /api/spotify`
+
+Requires the `X-API-Key` header.
+
+```bash
+curl -H "X-API-Key: your-secret-key" http://localhost:8000/api/spotify
+```
+
+```json
+{
+  "is_playing": true,
+  "track": "Weightless",
+  "artist": "Marconi Union",
+  "album": "Distance",
+  "progress": 74,
+  "duration": 487
+}
+```
+
+When nothing is playing, the endpoint falls back to the most recently finished
+track, so the display always has something to show:
+
+```json
+{
+  "is_playing": false,
+  "track": "Weightless",
+  "artist": "Marconi Union",
+  "album": "Distance",
+  "progress": null,
+  "played_at": "2026-09-06T09:14:22.031Z",
+  "duration": 487
+}
+```
+
+Read `is_playing` to tell the two apart: `progress` is set during playback,
+`played_at` is set for history. Never both.
+
+| Field | Meaning |
+| --- | --- |
+| `is_playing` | whether playback is currently active |
+| `track` / `artist` / `album` | names; `artist` joins multiple artists with `, ` |
+| `progress` | seconds into the track — live playback only, else `null` |
+| `duration` | track length in seconds |
+| `played_at` | ISO timestamp — history only, else `null` |
+
+**Tokens.** Run `python -m app.spotify_auth` once from `server/` to authorise;
+it prints a refresh token that goes in `.env`. Refresh tokens do not expire, so
+this is a one-time step. The server exchanges it for a one-hour access token,
+keeps that in memory, and renews it a minute before expiry — the ESP32 never
+sees any Spotify credential.
+
+**Scopes.** This needs both `user-read-currently-playing` and
+`user-read-recently-played`. If your refresh token was minted before the second
+one was added to `SPOTIFY_SCOPE`, the fallback logs a scope error and returns
+`{"is_playing": false}` with empty fields — re-run `app.spotify_auth` and
+replace the refresh token to fix it.
+
+Two Spotify quirks the fallback inherits: the recently-played list excludes
+skipped tracks and podcasts, and it never contains the track playing right now.
+Ads and podcast episodes arrive with no track item, so those also fall back to
+history.
