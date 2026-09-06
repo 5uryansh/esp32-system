@@ -2,10 +2,13 @@
 
 import asyncio
 import base64
+import hashlib
+import io
 import logging
 import time
 
 import httpx
+from PIL import Image, ImageOps
 
 from . import config
 from .models import NowPlaying
@@ -20,6 +23,13 @@ RECENTLY_PLAYED_URL = "https://api.spotify.com/v1/me/player/recently-played?limi
 class SpotifyUnavailable(Exception):
     """Raised when Spotify cannot be reached or its response is unusable."""
 
+
+# art_id -> source URL, so the binary endpoint can find the image again.
+_art_urls: dict[str, str] = {}
+
+# The last dithered bitmap, keyed by art URL: it only changes on track change.
+_art_url: str | None = None
+_art_bytes: bytes | None = None
 
 # Access tokens last an hour; keep one in memory and refresh when it expires.
 _access_token: str | None = None
@@ -153,21 +163,86 @@ def _json(response: httpx.Response) -> dict:
         raise SpotifyUnavailable("upstream returned invalid JSON") from exc
 
 
+def _pick_image(album: dict) -> str | None:
+    """Album art comes in 640/300/64 px. Take the middle one: it suits a small
+    display without the ESP32 having to decode a large JPEG."""
+    images = [i for i in album.get("images", []) if isinstance(i, dict) and i.get("url")]
+    if not images:
+        return None
+    images.sort(key=lambda i: abs((i.get("width") or 0) - 300))
+    return images[0]["url"]
+
+
+def _art_id(url: str | None) -> str | None:
+    """A short stable id for an art URL, so a client can spot a change."""
+    if not url:
+        return None
+    _art_urls[hashlib.sha1(url.encode()).hexdigest()[:8]] = url
+    return hashlib.sha1(url.encode()).hexdigest()[:8]
+
+
 def _parse(payload: dict) -> NowPlaying:
     item = payload.get("item")
     if not isinstance(item, dict):
         # Ads and podcast episodes come back without a track item.
         return NowPlaying(is_playing=bool(payload.get("is_playing")))
 
-
     artists = ", ".join(
         a["name"] for a in item.get("artists", []) if isinstance(a, dict) and a.get("name")
     )
+    album = item.get("album") or {}
     return NowPlaying(
         is_playing=bool(payload.get("is_playing")),
         track=item.get("name"),
         artist=artists or None,
-        album=(item.get("album") or {}).get("name"),
+        album=album.get("name"),
+        art_id=_art_id(_pick_image(album)),
         progress=round((payload.get("progress_ms") or 0) / 1000),
         duration=round((item.get("duration_ms") or 0) / 1000),
     )
+
+
+def _dither(raw: bytes) -> bytes:
+    """Turn a JPEG into a packed 1-bit bitmap for the e-ink panel.
+
+    Autocontrast first: album art clusters in the mid-tones, and stretching that
+    band across the full range gives the dither something to work with. Pillow's
+    convert("1") applies Floyd-Steinberg, which is what keeps a photo legible at
+    one bit. The result is inverted so a set bit means black ink.
+    """
+    size = config.SPOTIFY_ART_SIZE
+    with Image.open(io.BytesIO(raw)) as image:
+        grey = ImageOps.autocontrast(image.convert("L"))
+        grey = grey.resize((size, size), Image.LANCZOS)
+        return ImageOps.invert(grey).convert("1").tobytes()
+
+
+async def fetch_art() -> bytes:
+    """Return the current track's album art as a packed 1-bit bitmap."""
+    global _art_url, _art_bytes
+
+    now = await fetch_now_playing()
+    url = _art_urls.get(now.art_id or "")
+    if not url:
+        raise SpotifyUnavailable("no album art for the current track")
+
+    if url == _art_url and _art_bytes is not None:
+        return _art_bytes
+
+    async with httpx.AsyncClient(timeout=config.HTTP_TIMEOUT) as client:
+        try:
+            response = await client.get(url)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            logger.error("Could not download album art: %s", exc)
+            raise SpotifyUnavailable("could not download album art") from exc
+
+    try:
+        # Pillow is synchronous and CPU-bound; keep it off the event loop.
+        _art_bytes = await asyncio.to_thread(_dither, response.content)
+    except OSError as exc:
+        logger.error("Could not decode album art: %s", exc)
+        raise SpotifyUnavailable("could not decode album art") from exc
+
+    _art_url = url
+    return _art_bytes

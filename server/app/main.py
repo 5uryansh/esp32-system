@@ -3,11 +3,11 @@
 import logging
 import secrets
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
 
 from . import config
 from .models import Health, NowPlaying, Usage, Weather
-from .spotify import SpotifyUnavailable, fetch_now_playing
+from .spotify import SpotifyUnavailable, fetch_art, fetch_now_playing
 from .usage import UsageUnavailable, get_usage
 from .weather import WeatherUnavailable, fetch_weather
 
@@ -61,4 +61,18 @@ async def spotify() -> NowPlaying:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Spotify data unavailable",
+        ) from None
+
+
+@app.get("/api/spotify/art", dependencies=[Depends(require_api_key)])
+async def spotify_art() -> Response:
+    """Album art as a packed 1-bit bitmap, ready to blit to an e-ink panel."""
+    try:
+        return Response(
+            content=await fetch_art(), media_type="application/octet-stream"
+        )
+    except SpotifyUnavailable:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Album art unavailable",
         ) from None

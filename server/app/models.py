@@ -29,6 +29,8 @@ class NowPlaying(BaseModel):
     track: str | None = None
     artist: str | None = None
     album: str | None = None
+    art_id: str | None = None  # changes when the album art changes
+    art: str | None = None  # base64 bitmap, only when requested with ?art=1
     progress: int | None = None  # seconds into the track, live playback only
     duration: int | None = None  # seconds
     played_at: str | None = None  # set instead of progress when this is history

@@ -22,6 +22,7 @@ Copy `.env.example` to `.env` and fill it in:
 | `SPOTIFY_CLIENT_ID` | From your Spotify app dashboard |
 | `SPOTIFY_CLIENT_SECRET` | From your Spotify app dashboard |
 | `SPOTIFY_REFRESH_TOKEN` | Printed by `python -m app.spotify_auth` (run once) |
+| `SPOTIFY_ART_SIZE` | Optional. Album-art square size, multiple of 8. Default `200` |
 
 `.env` is git-ignored and must never be committed.
 
@@ -51,6 +52,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 | `GET` | `/api/weather` | `X-API-Key` | current conditions |
 | `GET` | `/api/usage` | `X-API-Key` | Claude Code quota |
 | `GET` | `/api/spotify` | `X-API-Key` | current or last played track |
+| `GET` | `/api/spotify/art` | `X-API-Key` | album art as a 1-bit bitmap |
 
 Both protected endpoints return `401` if `X-API-Key` is missing or wrong, and
 `502` if their data source fails. Errors are a plain `{"detail": "..."}` —
@@ -163,6 +165,7 @@ curl -H "X-API-Key: your-secret-key" http://localhost:8000/api/spotify
   "track": "Weightless",
   "artist": "Marconi Union",
   "album": "Distance",
+  "image": "https://i.scdn.co/image/ab67616d00001e02...",
   "progress": 74,
   "duration": 487
 }
@@ -190,6 +193,7 @@ Read `is_playing` to tell the two apart: `progress` is set during playback,
 | --- | --- |
 | `is_playing` | whether playback is currently active |
 | `track` / `artist` / `album` | names; `artist` joins multiple artists with `, ` |
+| `image` | album art URL, ~300px square (Spotify also offers 640 and 64) |
 | `progress` | seconds into the track — live playback only, else `null` |
 | `duration` | track length in seconds |
 | `played_at` | ISO timestamp — history only, else `null` |
@@ -210,3 +214,42 @@ Two Spotify quirks the fallback inherits: the recently-played list excludes
 skipped tracks and podcasts, and it never contains the track playing right now.
 Ads and podcast episodes arrive with no track item, so those also fall back to
 history.
+
+### `GET /api/spotify/art`
+
+Requires the `X-API-Key` header. Returns raw bytes, not JSON.
+
+```bash
+curl -H "X-API-Key: your-secret-key" \
+  http://localhost:8000/api/spotify/art --output art.bin
+```
+
+The current track's album art, converted server-side into a packed 1-bit bitmap
+for a black-and-white e-ink panel:
+
+```
+fetch JPEG → grayscale → autocontrast → resize → Floyd–Steinberg → pack
+```
+
+At the default 200×200 that is exactly **5000 bytes** — 8 pixels per byte,
+25 bytes per row, 200 rows, MSB first. A **set bit means black ink**. The ESP32
+does no image processing; the payload goes straight to the framebuffer:
+
+```cpp
+display.drawBitmap(x, y, buffer, 200, 200, GxEPD_BLACK);
+```
+
+If the image comes out inverted, flip the colour argument rather than changing
+the server.
+
+Autocontrast runs before dithering because album art clusters in the mid-tones;
+stretching that range is what keeps the dithered result legible. The result is
+cached in memory per art URL, so repeated polls of the same track re-serve the
+same bytes without re-downloading or re-dithering.
+
+Returns `502` when nothing is playing and no history is available, or when the
+image cannot be downloaded or decoded.
+
+**Refresh sparingly.** A full e-ink refresh takes ~2 seconds and flashes. Poll
+`/api/spotify` for the JSON, compare `track` against what you last drew, and
+only fetch this endpoint when it changes.

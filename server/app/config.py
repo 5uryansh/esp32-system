@@ -45,3 +45,9 @@ SPOTIFY_CLIENT_SECRET  = _required("SPOTIFY_CLIENT_SECRET")
 SPOTIFY_REDIRECT_URI = "http://127.0.0.1:8888/callback"
 SPOTIFY_SCOPE = "user-read-currently-playing user-read-recently-played"
 SPOTIFY_REFRESH_TOKEN = _required("SPOTIFY_REFRESH_TOKEN")
+
+# Album art is dithered to a square 1-bit bitmap for the e-ink panel. Rows are
+# packed 8 pixels per byte, so the size must be a multiple of 8.
+SPOTIFY_ART_SIZE: int = int(os.getenv("SPOTIFY_ART_SIZE", "").strip() or 200)
+if SPOTIFY_ART_SIZE % 8:
+    raise RuntimeError("SPOTIFY_ART_SIZE must be a multiple of 8")
